@@ -1,0 +1,332 @@
+﻿"use client";
+
+import { useState, type ChangeEvent } from "react";
+import { createWorker } from "tesseract.js";
+
+type Finding = {
+  title: string;
+  category: string;
+  sourceExcerpt: string;
+  explanation: string;
+  verified: boolean;
+};
+
+type Analysis = {
+  summary: string;
+  explanation: string;
+  findings: Finding[];
+  questions: string[];
+  glossary: { term: string; meaning: string; sourceExcerpt: string }[];
+  disclaimer: string;
+};
+
+const sample = `Fictional discharge instructions - CareBridge Demo Clinic
+
+Follow up with the outpatient clinic within seven days of discharge.
+Keep the wound clean and dry as directed by your care team.
+The medication section says: "Take the medication as directed."
+Seek help according to the warning signs and instructions provided by your healthcare team.`;
+
+export default function Home() {
+  const [documentText, setDocumentText] = useState("");
+  const [language, setLanguage] = useState("English");
+  const [level, setLevel] = useState("Simple");
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [ocrLoading, setOcrLoading] = useState(false);
+
+  async function analyzeDocument() {
+    if (!documentText.trim() || loading) return;
+
+    setLoading(true);
+    setError("");
+    setAnalysis(null);
+
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          document: documentText,
+          language,
+          level,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Analysis failed. Please try again.");
+      }
+
+      setAnalysis(data as Analysis);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to analyze the document. Check that the local AI is running."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function readImage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setError("");
+    setAnalysis(null);
+    setOcrLoading(true);
+
+    let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
+
+    try {
+      if (!file.type.startsWith("image/")) {
+        throw new Error("Please choose an image file.");
+      }
+
+      worker = await createWorker("eng");
+      const result = await worker.recognize(file);
+      const extractedText = result.data.text.trim();
+
+      if (!extractedText) {
+        throw new Error(
+          "No readable text was found. Try a clearer, well-lit photo."
+        );
+      }
+
+      setDocumentText((current) =>
+        current.trim()
+          ? `${current.trim()}\n\n${extractedText}`
+          : extractedText
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not read the image. Please try another image."
+      );
+    } finally {
+      if (worker) await worker.terminate();
+      setOcrLoading(false);
+      event.target.value = "";
+    }
+  }
+  return (
+    <>
+      <header className="site-header">
+        <div className="brand">
+          <div className="brand-icon">CB</div>
+          <div>
+            <h1>CareBridge AI</h1>
+            <p>UNDERSTAND YOUR CARE</p>
+          </div>
+        </div>
+        <span className="privacy-label">PRIVATE BY DESIGN</span>
+      </header>
+
+      <main className="page-layout">
+        <section className="workspace">
+          <p className="eyebrow">HEALTHCARE DOCUMENT ASSISTANT / 001</p>
+          <h2>Medical instructions, made clearer.</h2>
+          <p className="intro">
+            Turn clinician-provided documents into understandable explanations
+            and source-linked care checklists. Unclear information stays flagged,
+            never guessed.
+          </p>
+
+          <section className="panel">
+            <div className="panel-heading">
+              <h3>01 / Your document</h3>
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  setDocumentText(sample);
+                  setAnalysis(null);
+                  setError("");
+                }}
+                disabled={loading}
+              >
+                Try sample document
+              </button>
+            </div>
+
+            <textarea
+              value={documentText}
+              onChange={(e) => {
+                setDocumentText(e.target.value);
+                setAnalysis(null);
+                setError("");
+              }}
+              maxLength={20000}
+              placeholder="Paste your discharge instructions here..."
+              aria-label="Medical document"
+            />
+
+            <p className="counter">
+              {documentText.length.toLocaleString()} / 20,000 characters
+            </p>
+
+            <div className="form-grid">
+              <label>
+                Explanation language
+                <select
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  disabled={loading}
+                >
+                  <option>English</option>
+                  <option>Hindi</option>
+                  <option>Tamil</option>
+                </select>
+              </label>
+
+              <label>
+                Reading level
+                <select
+                  value={level}
+                  onChange={(e) => setLevel(e.target.value)}
+                  disabled={loading}
+                >
+                  <option>Simple</option>
+                  <option>Standard</option>
+                  <option>Detailed</option>
+                </select>
+              </label>
+            </div>
+
+            <button
+              className="primary-button"
+              disabled={!documentText.trim() || loading}
+              onClick={analyzeDocument}
+            >
+              {loading ? "Analyzing with local AI..." : "Analyze document ->"}
+            </button>
+
+            {loading && (
+              <p className="loading-message" role="status">
+                Your document is being processed by the local AI. This may
+                take a little time.
+              </p>
+            )}
+
+            {error && (
+              <div className="error-message" role="alert">
+                <strong>Analysis failed</strong>
+                <p>{error}</p>
+                <button className="secondary-button" onClick={analyzeDocument}>
+                  Try again
+                </button>
+              </div>
+            )}
+
+            <p className="disclaimer">
+              Informational use only. This tool does not diagnose, prescribe,
+              or replace your healthcare professional. Avoid entering
+              unnecessary identifying information.
+            </p>
+          </section>
+
+          {analysis && (
+            <section className="panel results-panel" aria-live="polite">
+              <p className="eyebrow">02 / AI ANALYSIS</p>
+              <h3>Document summary</h3>
+              <p className="result-summary">{analysis.summary}</p>
+              <p>{analysis.explanation}</p>
+
+              <div className="result-section">
+                <h3>Extracted findings ({analysis.findings.length})</h3>
+                {analysis.findings.length === 0 ? (
+                  <p>No supported findings were extracted. Review the source
+                    document with your healthcare professional.</p>
+                ) : (
+                  analysis.findings.map((finding, index) => (
+                    <article className="finding-card" key={`${finding.title}-${index}`}>
+                      <div className="finding-heading">
+                        <h4>{finding.title}</h4>
+                        <span className="status-tag">
+                          {finding.verified ? "Source verified" : "Verify source"}
+                        </span>
+                      </div>
+                      <p className="finding-category">{finding.category}</p>
+                      <blockquote>{finding.sourceExcerpt}</blockquote>
+                      <p>{finding.explanation}</p>
+                    </article>
+                  ))
+                )}
+              </div>
+
+              <div className="result-section">
+                <h3>Questions to clarify</h3>
+                {analysis.questions.length ? (
+                  <ul>
+                    {analysis.questions.map((question, index) => (
+                      <li key={`${question}-${index}`}>{question}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No questions were generated. This does not mean the
+                    document is complete or medically sufficient.</p>
+                )}
+              </div>
+
+              <div className="result-section">
+                <h3>Medical terms explained</h3>
+                {analysis.glossary.length ? (
+                  analysis.glossary.map((item, index) => (
+                    <article className="finding-card" key={`${item.term}-${index}`}>
+                      <h4>{item.term}</h4>
+                      <p>{item.meaning}</p>
+                      <p className="finding-category">Source: {item.sourceExcerpt}</p>
+                    </article>
+                  ))
+                ) : (
+                  <p>No glossary terms were returned.</p>
+                )}
+              </div>
+
+              <p className="disclaimer">{analysis.disclaimer}</p>
+            </section>
+          )}
+        </section>
+
+        <aside className="sidebar">
+          <section className="info-card">
+            <p className="eyebrow">OUR METHOD / 01</p>
+            <h3>Evidence before answers</h3>
+            <p>
+              Extracted instructions retain source wording so you can check
+              where each finding came from.
+            </p>
+          </section>
+
+          <section className="info-card warning-card">
+            <p className="eyebrow">SAFETY / 02</p>
+            <h3>Uncertainty stays visible</h3>
+            <p>
+              Missing medication directions and conflicting information must
+              be confirmed with the appropriate healthcare professional.
+            </p>
+          </section>
+
+          <section className="info-card">
+            <p className="eyebrow">WORKFLOW / 03</p>
+            <ol>
+              <li>Read the source</li>
+              <li>Explain clearly</li>
+              <li>Verify evidence</li>
+              <li>Review the checklist</li>
+            </ol>
+          </section>
+        </aside>
+      </main>
+
+      <footer className="site-footer">
+        CAREBRIDGE AI / INFORMATIONAL USE ONLY / NOT AN EMERGENCY SERVICE
+      </footer>
+    </>
+  );
+}
+

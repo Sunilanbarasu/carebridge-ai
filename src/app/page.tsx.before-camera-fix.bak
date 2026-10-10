@@ -1,0 +1,416 @@
+﻿"use client";
+import Image from "next/image";
+
+import { useState, type ChangeEvent } from "react";
+import { createWorker } from "tesseract.js";
+
+type Finding = {
+  title: string;
+  category: string;
+  sourceExcerpt: string;
+  explanation: string;
+  verified: boolean;
+};
+
+type Analysis = {
+  summary: string;
+  explanation: string;
+  findings: Finding[];
+  questions: string[];
+  glossary: { term: string; meaning: string; sourceExcerpt: string }[];
+  disclaimer: string;
+};
+
+const sample = `Fictional discharge instructions - CareBridge Demo Clinic
+
+Follow up with the outpatient clinic within seven days of discharge.
+Keep the wound clean and dry as directed by your care team.
+The medication section says: "Take the medication as directed."
+Seek help according to the warning signs and instructions provided by your healthcare team.`;
+
+function MedicalNotice() {
+  return (
+    <div className="medical-notice" role="note" aria-labelledby="medical-notice-title">
+  <h3 id="medical-notice-title"><span aria-hidden="true">⚠️ </span>Important Medical Notice</h3>
+  <p>This tool helps you understand what your prescription or medical document says in simple language. It is for informational purposes only and does not replace professional medical advice. Always consult a qualified doctor or pharmacist for questions about your prescription, medicines, dosage, side effects, or treatment. Never start, stop, or change medication based only on this tool’s explanation. If any instruction is unclear, missing, or conflicting, contact your healthcare professional before acting on it.</p>
+</div>
+  );
+}
+
+const reviewItems = [
+  "I compared the explanation with my original document.",
+  "I checked the quoted source information.",
+  "I noted instructions or details that are unclear.",
+  "I will confirm medical questions with a doctor or pharmacist."
+];
+
+export default function Home() {
+  const [documentText, setDocumentText] = useState("");
+  const [language, setLanguage] = useState("English");
+  const [level, setLevel] = useState("Simple");
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [reviewedItems, setReviewedItems] = useState<string[]>([]);
+
+  async function analyzeDocument() {
+    if (!documentText.trim() || loading) return;
+
+    setLoading(true);
+    setError("");
+    setAnalysis(null);
+
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          document: documentText,
+          language,
+          level,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Analysis failed. Please try again.");
+      }
+
+      setAnalysis(data as Analysis);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to analyze the document. Check that the local AI is running."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function readImage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setError("");
+    setAnalysis(null);
+    setOcrLoading(true);
+
+    let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
+
+    try {
+      if (!file.type.startsWith("image/")) {
+        throw new Error("Please choose an image file.");
+      }
+
+      worker = await createWorker("eng");
+      const result = await worker.recognize(file);
+      const extractedText = result.data.text.trim();
+
+      if (!extractedText) {
+        throw new Error(
+          "No readable text was found. Try a clearer, well-lit photo."
+        );
+      }
+
+      setDocumentText((current) =>
+        current.trim()
+          ? `${current.trim()}\n\n${extractedText}`
+          : extractedText
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not read the image. Please try another image."
+      );
+    } finally {
+      if (worker) await worker.terminate();
+      setOcrLoading(false);
+      event.target.value = "";
+    }
+  }
+  return (
+    <>
+      <header className="site-header">
+        <div className="brand">
+          <Image src="/carebridge-icon.png" alt="CareBridge AI symbol" width={64} height={64} priority className="brand-logo" />
+          <div>
+            <h1>CareBridge AI</h1>
+            <p>UNDERSTAND YOUR CARE</p>
+          </div>
+        </div>
+        <span className="privacy-label">PRIVATE BY DESIGN</span>
+      </header>
+
+      <main className="page-layout">
+        <section className="workspace">
+          <p className="eyebrow">HEALTHCARE DOCUMENT ASSISTANT / 001</p>
+          <h2>Your medical documents, explained in simple language.</h2>
+          <p className="intro">
+            Understand your prescriptions and healthcare instructions more easily.
+            Upload a document to receive a simple explanation, review the original
+            information, and identify questions to discuss with your healthcare professional.
+          </p>
+
+          <MedicalNotice />
+
+          <section className="panel">
+            <div className="panel-heading">
+              <h3>Your document</h3>
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  setDocumentText(sample);
+                  setAnalysis(null);
+                  setError("");
+                }}
+                disabled={loading}
+              >
+                Try Sample Document
+              </button>
+            </div>
+
+            <textarea
+              value={documentText}
+              onChange={(e) => {
+                setDocumentText(e.target.value);
+                setAnalysis(null);
+                setError("");
+              }}
+              maxLength={20000}
+              placeholder="Paste your discharge instructions here..."
+              aria-label="Medical document"
+            />
+
+            <div className="image-controls">
+              <label className="secondary-button image-upload-button" htmlFor="carebridge-image-upload">
+                {ocrLoading ? "Reading image..." : "Upload Image"}
+              </label>
+              <input
+                id="carebridge-image-upload"
+                type="file"
+                accept="image/*"
+                onChange={readImage}
+                disabled={ocrLoading || loading}
+              / capture="environment">
+
+              <label className="secondary-button image-upload-button" htmlFor="carebridge-camera-capture">
+                Take Photo
+              </label>
+              <input
+                id="carebridge-camera-capture"
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={readImage}
+                disabled={ocrLoading || loading}
+              />
+            </div>
+
+            {ocrLoading && (
+              <p className="loading-message" role="status">
+                Extracting text from your image. The first OCR run may take a little longer.
+              </p>
+            )}
+
+            <p className="counter">
+              {documentText.length.toLocaleString()} / 20,000 characters
+            </p>
+
+            <div className="form-grid">
+              <label>
+                Explanation language
+                <select
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  disabled={loading}
+                >
+                  <option>English</option>
+                  <option>Hindi</option>
+                  <option>Tamil</option>
+                </select>
+              </label>
+
+              <label>
+                Reading level
+                <select
+                  value={level}
+                  onChange={(e) => setLevel(e.target.value)}
+                  disabled={loading}
+                >
+                  <option>Simple</option>
+                  <option>Standard</option>
+                  <option>Detailed</option>
+                </select>
+              </label>
+            </div>
+
+            <button
+              className="primary-button"
+              disabled={!documentText.trim() || loading}
+              onClick={analyzeDocument}
+            >
+              {loading ? "Analyzing your document..." : "Analyze Document →"}
+            </button>
+
+            <p className="short-medical-reminder">
+              For medical decisions, confirm instructions with your doctor or pharmacist.
+              Do not change medication based only on this explanation.
+            </p>
+
+            {loading && (
+              <p className="loading-message" role="status">
+                Your document is being processed by the local AI. This may
+                take a little time.
+              </p>
+            )}
+
+            {error && (
+              <div className="error-message" role="alert">
+                <strong>Analysis failed</strong>
+                <p>{error}</p>
+                <button className="secondary-button" onClick={analyzeDocument}>
+                  Try again
+                </button>
+              </div>
+            )}
+
+            <p className="disclaimer">
+              Informational use only. This tool does not diagnose, prescribe,
+              or replace your healthcare professional. Avoid entering
+              unnecessary identifying information.
+            </p>
+          </section>
+
+          {analysis && (
+            <section className="panel results-panel" aria-live="polite">
+              <p className="eyebrow">YOUR DOCUMENT EXPLAINED</p>
+              <MedicalNotice />
+              <h3>What Your Document Says</h3>
+              <p className="result-summary">{analysis.summary}</p>
+              <div className="result-section"><h3>Simple Explanation</h3><p>{analysis.explanation}</p></div>
+
+              <div className="result-section">
+                <h3>Important Instructions ({analysis.findings.length})</h3>
+                <p className="result-help">Each quotation is checked against the text you provided. A matching quotation confirms its presence in the document, not the medical accuracy of the explanation.</p>
+                {analysis.findings.length === 0 ? (
+                  <p>No supported findings were extracted. Review the source
+                    document with your healthcare professional.</p>
+                ) : (
+                  analysis.findings.map((finding, index) => (
+                    <article className="finding-card" key={`${finding.title}-${index}`}>
+                      <div className="finding-heading">
+                        <h4>{finding.title}</h4>
+                        <span className="status-tag">
+                          {finding.verified ? "Quotation found in source" : "Quotation not found — check source"}
+                        </span>
+                      </div>
+                      <p className="finding-category">{finding.category}</p>
+                      <blockquote>{finding.sourceExcerpt}</blockquote>
+                      <p>{finding.explanation}</p>
+                    </article>
+                  ))
+                )}
+              </div>
+
+              <div className="result-section">
+                <h3>Questions to Ask Your Doctor</h3>
+                {analysis.questions.length ? (
+                  <ul>
+                    {analysis.questions.map((question, index) => (
+                      <li key={`${question}-${index}`}>{question}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No questions were generated. This does not mean the
+                    document is complete or medically sufficient.</p>
+                )}
+              </div>
+
+              <div className="result-section checklist-section">
+                <h3>Review Checklist</h3>
+                <p className="result-help">Use this checklist to help you review the document. Checking an item does not confirm that the treatment is medically correct.</p>
+                {reviewItems.map((item) => (
+                  <label className="review-item" key={item}>
+                    <input
+                      type="checkbox"
+                      checked={reviewedItems.includes(item)}
+                      onChange={(event) => setReviewedItems((current) =>
+                        event.target.checked
+                          ? [...current, item]
+                          : current.filter((entry) => entry !== item)
+                      )}
+                    />
+                    <span>{item}</span>
+                  </label>
+                ))}
+                <p className="checklist-progress">
+                  {reviewedItems.length} of {reviewItems.length} items reviewed
+                </p>
+              </div>
+
+              <div className="result-section">
+                <h3>Medical Terms Explained</h3>
+                {analysis.glossary.length ? (
+                  analysis.glossary.map((item, index) => (
+                    <article className="finding-card" key={`${item.term}-${index}`}>
+                      <h4>{item.term}</h4>
+                      <p>{item.meaning}</p>
+                      <p className="finding-category">Source: {item.sourceExcerpt}</p>
+                    </article>
+                  ))
+                ) : (
+                  <p>No glossary terms were returned.</p>
+                )}
+              </div>
+
+              <p className="disclaimer">{analysis.disclaimer}</p>
+            </section>
+          )}
+        </section>
+
+        <aside className="sidebar">
+          <section className="info-card">
+            <p className="eyebrow">HOW IT WORKS</p>
+            <h3>Evidence before answers</h3>
+            <p>
+              Extracted instructions retain source wording so you can check
+              where each finding came from.
+            </p>
+          </section>
+
+          <section className="info-card warning-card">
+            <p className="eyebrow">YOUR SAFETY</p>
+            <h3>Uncertainty stays visible</h3>
+            <p>
+              Missing medication directions and conflicting information must
+              be confirmed with the appropriate healthcare professional.
+            </p>
+          </section>
+
+          <section className="info-card">
+            <p className="eyebrow">YOUR NEXT STEPS</p>
+            <ol>
+              <li>Read the source</li>
+              <li>Explain clearly</li>
+              <li>Verify evidence</li>
+              <li>Review the checklist</li>
+            </ol>
+          </section>
+        </aside>
+      </main>
+
+      <footer className="site-footer">
+        CAREBRIDGE AI / INFORMATIONAL USE ONLY / NOT AN EMERGENCY SERVICE
+      </footer>
+    </>
+  );
+}
+
+
+
+
+
